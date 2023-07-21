@@ -40,8 +40,15 @@
     implicit none
     integer , save :: flag = 0
     double precision :: ran
+    integer :: n
+    integer,allocatable :: seed(:)
+
     if(flag==0) then
-        call random_seed()
+        call random_seed(size=n)
+        allocate(seed(n))
+        seed = 123456789    ! putting arbitrary seed to all elements
+        call random_seed(put=seed)
+        deallocate(seed)
         flag = 1
     endif
     call random_number(ran)     ! built in fortran 90 random number function
@@ -79,7 +86,7 @@
 
     implicit none
 
-    integer(kind=IB), parameter :: NP=60, itermax=2000, strategy=6, &
+    integer(kind=IB), parameter :: NP=60, itermax=50, strategy=6, &
         refresh=10, iwrite=15
     integer(kind=IB), dimension(3), parameter :: method=(/0, 1, 1/)
     real(kind=8), parameter :: VTR=1.0e-30_RPD, CR_XC=0.5_RPD
@@ -189,11 +196,11 @@
     allocate(rho_true(nolayer), hh_true(nolayer))
     allocate(rho_iter(nolayer), hh_iter(nolayer))
 
-    ! print*,"size0 = ",size0
-    ! print*,"size1 = ",size1
-    ! print*,"size2 = ",size2
-    ! print*,"tot_ntc = ",tot_ntc
-    ! print*,"tot_para = ",tot_para
+    print*,"size0 = ",size0
+    print*,"size1 = ",size1
+    print*,"size2 = ",size2
+    print*,"tot_ntc = ",tot_ntc
+    print*,"tot_para = ",tot_para
 
     !******************************************************************
     Open (16, File='res2d.dat', Status='unknown')
@@ -470,7 +477,6 @@
     !                   = other, displaying results only.
 
     use data_type, only : IB, RPD
-    use mpi
     implicit none
 
     integer :: ntc,nolayer,npara,ns,tot_ntc,Dim_XC
@@ -498,23 +504,11 @@
     intrinsic max, min, random_number, mod, abs, any, all, maxloc
     integer(kind=IB) :: n,number,y,z
 
+
     integer :: iTimes1, iTimes2, iTimes3, iTimes4, rate
-
-    integer:: ierr, rank, nproc_current
-    integer:: Proc1, workPProc1, cur_i
-    integer, allocatable :: ui_XC_index(:)
-    real(kind=8), allocatable :: tempval_proc(:)
-    real(kind=8), dimension(NP) :: tempval_main
-
-    Proc1 = 6
-    workPProc1 = NP / Proc1
-    allocate(ui_XC_index(workPProc1))
-    allocate(tempval_proc(workPProc1))
-
     call SYSTEM_CLOCK(count_rate=rate)
     call SYSTEM_CLOCK(iTimes1)
     !!-----Initialize a population --------------------------------------------!!
-
 
     pop_XC=0.0_RPD
     do i=1,NP
@@ -547,27 +541,14 @@
     bm_XC=0.0_RPD
     rot=(/(i,i=0,NP-1)/)
     iter=1
-
-    !!------ MPI INITIALIZED----------------------------------------------------!!
-    call MPI_INIT(ierr)
-    call MPI_COMM_SIZE(MPI_COMM_WORLD, nproc_current, ierr)
-    call MPI_COMM_RANK(MPI_COMM_WORLD, rank, ierr)
-    
-    do i = 1,size(ui_XC_index)
-        ui_XC_index(i) = rank*size(ui_XC_index) + i
-    end do
     !!------Perform evolutionary computation------------------------------------!!
 
     do while (iter <= itermax)
 
         call SYSTEM_CLOCK(iTimes2)
-
-        if(rank .eq. 0)then
-            print*, 'Iteration: ', iter
-        end if
+        print*, iter
 
 
-        
         popold_XC=pop_XC
 
         !!------Mutation operation--------------------------------------------------!!
@@ -594,7 +575,6 @@
         bm_XC=spread(bestmemit_XC, DIM=1, NCOPIES=NP)  ! 按照维度dim复制bestmemit_XC矩阵NP次
 
         !----- Generating a random sacling factor--------------------------------!
-        ! Note: method(1)=0 here, fixed F_XC value
         select case (method(1))
         case(1)
             call random_number(F_XC)  ! 0~1
@@ -603,9 +583,7 @@
             F_XC=2.0_RPD*F_XC-1.0_RPD   !-1~1
         end select
 
-
         !---- select a mutation strategy-----------------------------------------!
-        ! Note: strategy = 6 here
         select case (strategy)
         case (1)
             ui_XC=bm_XC+F_XC*(popold_XC(a1,:)-popold_XC(a2,:))
@@ -643,43 +621,11 @@
         ui_XC=popold_XC*mpo_XC+ui_XC*mui_XC
         !!--------------------------------------------------------------------------!!
         !!------Evaluate fitness functions and find the best member-----------------!!
-
-
-
-        ! ui_XC   input
-        ! val(i)/tempval  output
-        do i = 1,NP
-            ui_XC(i,:)=max(min(ui_XC(i,:),XCmax),XCmin)
-        end do
-
-        do i = 1,size(ui_XC_index)
-            cur_i = ui_XC_index(i)
+        do i=1,NP
             !!------Confine each of feasible individuals in the lower-upper bound-------!!
-            
-            call obj(ui_XC(cur_i,:),tot_ntc,Dim_XC,ntc,nolayer,npara,ns,m_ap,Vobs1,tempval)
-            ! nfeval=nfeval+1
-
-            tempval_proc(i) = tempval
-            ! if (tempval < val(cur_i)) then
-            !     pop_XC(cur_i,:)=ui_XC(cur_i,:)
-            !     val(cur_i)=tempval
-            !     ! if (tempval < bestval) then
-            !     !     bestval=tempval
-            !     !     bestmem_XC=ui_XC(i,:)
-            !     ! end if
-            ! end if
-        end do
-
-        call MPI_AllGather( tempval_proc, workPProc1, MPI_DOUBLE_PRECISION, &  ! everyone send 3*2 ints
-                tempval_main, workPProc1, MPI_DOUBLE_PRECISION,        &  ! root gets 1 resized type from everyone
-                MPI_COMM_WORLD, ierr)
-
-        
-        call MPI_Barrier(MPI_COMM_WORLD, ierr)
-        ! call MPI_Bcast(pop_XC) !  call MPI_Bcast(val)
-
-        do i = 1,NP
-            tempval = tempval_main(i)
+            ui_XC(i,:)=max(min(ui_XC(i,:),XCmax),XCmin)
+            call obj(ui_XC(i,:),tot_ntc,Dim_XC,ntc,nolayer,npara,ns,m_ap,Vobs1,tempval)
+            nfeval=nfeval+1
             if (tempval < val(i)) then
                 pop_XC(i,:)=ui_XC(i,:)
                 val(i)=tempval
@@ -689,44 +635,32 @@
                 end if
             end if
         end do
-
         bestmemit_XC=bestmem_XC
+        if( (refresh > 0) .and. (mod(iter,refresh)==0)) then
+!            if (method(3)==1) write(unit=iwrite,FMT=203) iter
+            write(unit=*, FMT=203) iter
+            do i=1,Dim_XC
+!                if (method(3)==1) write(unit=iwrite, FMT=202) i, bestmem_XC(i)
+                write(*,FMT=202) i,dexp(bestmem_XC(i))
+            end do
+            if (method(3)==1) write(unit=iwrite, FMT=201) bestval
+            write(unit=*, FMT=201) bestval
+        end if
+        iter=iter+1
+        if ( bestval <= VTR .and. refresh > 0) then
+            write(unit=iwrite, FMT=*) ' The best fitness is smaller than VTR'
+            write(unit=*, FMT=*) 'The best fitness is smaller than VTR'
+            exit
+        endif
+
+        print*,bestval
 
         call SYSTEM_CLOCK(iTimes3)
-
-        if(rank .eq. 0)then
-            if( (refresh > 0) .and. (mod(iter,refresh)==0)) then
-    !            if (method(3)==1) write(unit=iwrite,FMT=203) iter
-                write(unit=*, FMT=203) iter
-                do i=1,Dim_XC
-    !                if (method(3)==1) write(unit=iwrite, FMT=202) i, bestmem_XC(i)
-                    write(*,FMT=202) i,dexp(bestmem_XC(i))
-                end do
-                if (method(3)==1) write(unit=iwrite, FMT=201) bestval
-                write(unit=*, FMT=201) bestval
-            end if
-            if ( bestval <= VTR .and. refresh > 0) then
-                write(unit=iwrite, FMT=*) ' The best fitness is smaller than VTR'
-                write(unit=*, FMT=*) 'The best fitness is smaller than VTR'
-                exit
-            endif
-
-            print*, 'bestval = ',bestval 
-
-            print*, 'One Iter Time cost: ', real(iTimes3-iTimes2)/real(rate)
-
-        end if
-        
-        iter=iter+1
+        print*, 'One Iter Time cost: ', real(iTimes3-iTimes2)/real(rate)
 
     end do
-
-    call MPI_Finalize(ierr)
     call SYSTEM_CLOCK(iTimes4)
-
-    if(rank .eq. 0)then
-        print*, 'ALL Time cost: ', real(iTimes4-iTimes1)/real(rate)
-    end if
+    print*, 'ALL Time cost: ', real(iTimes4-iTimes1)/real(rate)
 
     !!------end the evolutionary computation------------------------------!!
 201 format(2x, 'bestval =', ES14.7, /)
@@ -779,95 +713,7 @@
     Data ngau/1000/
     Common /para/r
 
-    Common /funn/frq,nfrq, func
-
-    ! ==== copy from frt, variable definition =======
-    Complex *16 fun, iomega
-    Real *8 ft,  q
-    Real *8  funr0(67), funi0(67)
-    Real *8 f(160), omega(160), funr1(160), funi1(160), h(200)
-    ! Data pi, q/3.141592654D0, 1.258925412D0/
-    Data ncnull, nc, ndec, (h(i), i=1, 160)/80,160,10,&
-        & 2.59511139938829d-13,3.66568771323555d-13,5.17792876616242d-13,&
-        & 7.31400730405791d-13,1.03313281156235d-12,1.45933600088387d-12,&
-        & 2.06137146234699d-12,2.91175733962418d-12,4.11297804457870d-12,&
-        & 5.80971771117984d-12,8.20647323099742d-12,1.15919058389365d-11,&
-        & 1.63740746547780d-11,2.31288803930431d-11,3.26705938902288d-11,&
-        & 4.61481520721098d-11,6.51864545047052d-11,9.20775899532545d-11,&
-        & 1.30064200980219d-10,1.83718747396255d-10,2.59512512377884d-10,&
-        & 3.66566596154242d-10,5.17796324027279d-10,7.31395266627501d-10,&
-        & 1.03314147106736d-09,1.45932227649333d-09,2.06139321404013d-09,&
-        & 2.91172286551380d-09,4.11303268236158d-09,5.80963111612975d-09,&
-        & 8.20661047490285d-09,1.15916883220051d-08,1.63744193958818d-08,&
-        & 2.31283340152144d-08,3.26714598407299d-08,4.61467796330556d-08,&
-        & 6.84744728867720d-08,5.46574677490374d-08,1.13319898777493d-07,&
-        & 2.16529974157527d-07,2.88629942214140d-07,3.42872728051125d-07,&
-        & 4.79119488706262d-07,7.42089418889752d-07,1.07736520535271d-06,&
-        & 1.46383231306575d-06,2.01727682134668d-06,2.89058197617431d-06,&
-        & 4.15237808867022d-06,5.84448989361742d-06,8.18029430348419d-06,&
-        & 1.15420854481494d-05,1.63897017145322d-05,2.31769096113890d-05,&
-        & 3.26872676331330d-05,4.60786866701851d-05,6.51827321351636d-05,&
-        & 9.20862589540037d-05,1.30169142615951d-04,1.83587481111627d-04,&
-        & 2.59595544393723d-04,3.66324383719323d-04,5.18210697462501d-04,&
-        & 7.30729969562531d-04,1.03385239132389d-03,1.45738764044730d-03,&
-        & 2.06298256402732d-03,2.90606401578959d-03,4.11467957883740d-03,&
-        & 5.79034253321120d-03,8.20005721235220d-03,1.15193892333104d-02,&
-        & 1.63039398900789d-02,2.28256810984487d-02,3.22248555163692d-02,&
-        & 4.47865101670011d-02,6.27330674874545d-02,8.57058672847471d-02,&
-        & 1.17418179407605d-01,1.53632645832305d-01,1.97718111895102d-01,&
-        & 2.28849924263247d-01,2.40310905012422d-01,1.65409071929404d-01,&
-        & 2.84709685167114d-03,-2.88015846269687d-01,-3.69097391853225d-01,&
-        & -2.50109865922601d-02,5.71811109500426d-01,-3.92261390212769d-01,&
-        & 7.63282774297327d-02,5.16233692927851d-02,-6.48015160576432d-02,&
-        & 4.89045522502552d-02,-3.26934307794750d-02,2.10542570949745d-02,&
-        & -1.33862848934736d-02,8.47098801479259d-03,-5.35134515919751d-03,&
-        & 3.37814023806349d-03,-2.13157364002470d-03,1.34506352474558d-03,&
-        & -8.48929743771803d-04,5.35521822356713d-04,-3.37744799986382d-04,&
-        & 2.13268792633204d-04,-1.34629969723156d-04,8.47737416679279d-05,&
-        & -5.34940635827096d-05,3.3904416298191d-05,-2.13315638358794d-05,&
-        & 1.33440911625019d-05,-8.51629073825634d-06,5.44362672273211d-06,&
-        & -3.32112278417896d-06,2.07147190852386d-06,-1.42009412555511d-06,&
-        & 8.78247754998004d-07,-4.5566280473703d-07,3.38598103040009d-07,&
-        & -2.87407830772251d-07,1.07866150545699d-07,-2.4724024185358d-08,&
-        & 5.35535110396030d-08,-3.3789981131378d-08,2.13200367531820d-08,&
-        & -1.34520337740075d-08,8.48765950790546d-09,-5.35535110396018d-09,&
-        & 3.37899811131383d-09,-2.13200367531819d-09,1.34520337740075d-09,&
-        & -8.48765950790576d-10,5.35535110396015d-10,-3.37899811131382d-10,&
-        & 2.13200367531811d-10,-1.34520337740079d-10,8.48765950790572d-11,&
-        & -5.35535110396034d-11,3.37899811131381d-11,-2.13200367531818d-11,&
-        & 1.34520337740074d-11,-8.48765950790571d-12,5.35535110396031d-12,&
-        & -3.37899811131379d-12,2.13200367531817d-12,-1.34520337740073d-12,&
-        & 8.48765950790567d-13,-5.35535110396029d-13,3.37899811131377d-13,&
-        & -2.13200367531816d-13,1.34520337740078d-13,-8.48765950790596d-14,&
-        & 5.35535110396007d-14,-3.37899811131377d-14,2.13200367531816d-14,&
-        & -1.34520337740083d-14,8.4876550790558d-15,-5.35535110396025d-15,&
-        & 3.37899811131389d-15/
-    Data nfrq, (frq(i), i=1, 67)/67,&
-        & 0.10000000d-02,0.14677993d-02,0.21544347d-02,0.31622777d-02,&
-        & 0.46415888d-02,0.68129207d-02,0.10000000d-01,0.14677993d-01,&
-        & 0.21544347d-01,0.31622777d-01,0.46415888d-01,0.68129207d-01,&
-        & 0.10000000d+00,0.14677993d+00,0.21544347d+00,0.31622777d+00,&
-        & 0.46415888d+00,0.68129207d+00,0.10000000d+01,0.14677993d+01,&
-        & 0.21544347d+01,0.31622777d+01,0.46415888d+01,0.68129207d+01,&
-        & 0.10000000d+02,0.14677993d+02,0.21544347d+02,0.31622777d+02,&
-        & 0.46415888d+02,0.68129207d+02,0.10000000d+03,0.14677993d+03,&
-        & 0.21544347d+03,0.31622777d+03,0.46415888d+03,0.68129207d+03,&
-        & 0.10000000d+04,0.14677993d+04,0.21544347d+04,0.31622777d+04,&
-        & 0.46415888d+04,0.68129207d+04,0.10000000d+05,0.14677993d+05,&
-        & 0.21544347d+05,0.31622777d+05,0.46415888d+05,0.68129207d+05,&
-        & 0.10000000d+06,0.14677993d+06,0.21544347d+06,0.31622777d+06,&
-        & 0.46415888d+06,0.68129207d+06,0.10000000d+07,0.14677993d+07,&
-        & 0.21544347d+07,0.31622777d+07,0.46415888d+07,0.68129207d+07,&
-        & 0.10000000d+08,0.14677993d+08,0.21544347d+08,0.31622777d+08,&
-        & 0.46415888d+08,0.68129207d+08,0.1000000d+09/
-    
-    
-
-    
-    
-    
-    ! ==== copy from frt, variable definition =======
-
+    Common /funn/frq, func
 
     !**************************************************************
     Call filter
@@ -920,9 +766,7 @@
     End If
 
 
-    Do i = 1, nfrq
-        Call forward(rho, hh, frq(i), func(2,i), 2, zplus, zminus, nlayer) ! mu0*H = B
-    End Do
+
     !********************* impulse and step wave ************************
     If (ic==0 .Or. ic==1) Then
         ik = 0
@@ -1097,7 +941,7 @@
     Real *8 t, ft, zplus, zminus, pi, q, rho1(nlayer), hh1(nlayer)
     Real *8 frq(67), funr0(67), funi0(67)
     Real *8 f(160), omega(160), funr1(160), funi1(160), h(200)
-    Common /funn/frq, nfrq, func
+    Common /funn/frq, func
     Data pi, q/3.141592654D0, 1.258925412D0/
     Data ncnull, nc, ndec, (h(i), i=1, 160)/80,160,10,&
         & 2.59511139938829d-13,3.66568771323555d-13,5.17792876616242d-13,&
@@ -1154,15 +998,29 @@
         & 5.35535110396007d-14,-3.37899811131377d-14,2.13200367531816d-14,&
         & -1.34520337740083d-14,8.4876550790558d-15,-5.35535110396025d-15,&
         & 3.37899811131389d-15/
-    
-    
-    ! If (ik==0) Then
-    !     Do i = 1, nfrq
-    !         Call forward(rho1, hh1, frq(i), func(item,i), item, zplus, zminus, nlayer) ! mu0*H = B
-    !     End Do
-    ! End If
-   
-    
+    Data nfrq, (frq(i), i=1, 67)/67,&
+        & 0.10000000d-02,0.14677993d-02,0.21544347d-02,0.31622777d-02,&
+        & 0.46415888d-02,0.68129207d-02,0.10000000d-01,0.14677993d-01,&
+        & 0.21544347d-01,0.31622777d-01,0.46415888d-01,0.68129207d-01,&
+        & 0.10000000d+00,0.14677993d+00,0.21544347d+00,0.31622777d+00,&
+        & 0.46415888d+00,0.68129207d+00,0.10000000d+01,0.14677993d+01,&
+        & 0.21544347d+01,0.31622777d+01,0.46415888d+01,0.68129207d+01,&
+        & 0.10000000d+02,0.14677993d+02,0.21544347d+02,0.31622777d+02,&
+        & 0.46415888d+02,0.68129207d+02,0.10000000d+03,0.14677993d+03,&
+        & 0.21544347d+03,0.31622777d+03,0.46415888d+03,0.68129207d+03,&
+        & 0.10000000d+04,0.14677993d+04,0.21544347d+04,0.31622777d+04,&
+        & 0.46415888d+04,0.68129207d+04,0.10000000d+05,0.14677993d+05,&
+        & 0.21544347d+05,0.31622777d+05,0.46415888d+05,0.68129207d+05,&
+        & 0.10000000d+06,0.14677993d+06,0.21544347d+06,0.31622777d+06,&
+        & 0.46415888d+06,0.68129207d+06,0.10000000d+07,0.14677993d+07,&
+        & 0.21544347d+07,0.31622777d+07,0.46415888d+07,0.68129207d+07,&
+        & 0.10000000d+08,0.14677993d+08,0.21544347d+08,0.31622777d+08,&
+        & 0.46415888d+08,0.68129207d+08,0.1000000d+09/
+    If (ik==0) Then
+        Do i = 1, nfrq
+            Call forward(rho1, hh1, frq(i), func(item,i), item, zplus, zminus, nlayer) ! mu0*H = B
+        End Do
+    End If
     Do nn = 1, nc
         n = -nc + ncnull + nn
         omega(nn) = q**(-(n-1))/t

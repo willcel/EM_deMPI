@@ -40,8 +40,15 @@
     implicit none
     integer , save :: flag = 0
     double precision :: ran
+    integer :: n
+    integer,allocatable :: seed(:)
+
     if(flag==0) then
-        call random_seed()
+        call random_seed(size=n)
+        allocate(seed(n))
+        seed = 123456789    ! putting arbitrary seed to all elements
+        call random_seed(put=seed)
+        deallocate(seed)
         flag = 1
     endif
     call random_number(ran)     ! built in fortran 90 random number function
@@ -79,7 +86,7 @@
 
     implicit none
 
-    integer(kind=IB), parameter :: NP=60, itermax=2000, strategy=6, &
+    integer(kind=IB), parameter :: NP=60, itermax=10, strategy=6, &
         refresh=10, iwrite=15
     integer(kind=IB), dimension(3), parameter :: method=(/0, 1, 1/)
     real(kind=8), parameter :: VTR=1.0e-30_RPD, CR_XC=0.5_RPD
@@ -576,7 +583,7 @@
             call randperm(z,number)
             ind(z)=number
         enddo
-
+        
         do y=1,NP
             call randperm(y,number)
             a1(y)=number
@@ -625,8 +632,35 @@
         case (6) ! A linear crossover combination of bm_XC and popold_XC
             if (method(2) == 1) call random_number(F_CR)
             ui_XC=popold_XC+F_CR*(bm_XC-popold_XC)+F_XC*(popold_XC(a1,:)-popold_XC(a2,:))
+        
+            ! if(rank .eq. 5)then
+            !     print*, 'ui_XC value is:'
+            !     print*, ui_XC(55,7)
+            !     print*, 'F_CR'
+            !     print*, F_CR
+            !     print*, 'bm_XC'
+            !     print*, bm_XC(55,7)
+            !     print*, 'popold_XC(55,7)'
+            !     print*, popold_XC(55,7)
+            !     print*, 'popold_XC(a1,7)'
+            !     print*, popold_XC(4,7)
+            !     print*, popold_XC(a1(55),7)
+            !     print*, 'popold_XC(a2,7)'
+            !     print*, popold_XC(18,7)
+            !     print*, popold_XC(a2(55),7)
+            !     print*, 'a1:',a1(55),'a2:',a2(55),'FXC',F_XC
+            ! end if
+        ! if(rank .eq. 5)then
+        !     print*, 'ui_XC value is:'
+        !     print*, ui_XC(55,7)
+        ! end if
 
         end select
+
+        ! if(rank .eq. 2)then
+        !     print*, 'F_CR value is:'
+        !     print*, F_CR
+        ! end if
         !!--------------------------------------------------------------------------!!
         !!------Crossover operation-------------------------------------------------!!
         call random_number(rand_XC)
@@ -646,6 +680,44 @@
 
 
 
+
+        ! if(rank .eq. 1)then
+        !     print*, 'rank1, ui_index21:', ui_XC(1,:)
+        ! end if
+        if(rank .eq. 2)then
+            ! print*, 'rank0, ui_index21:', ui_XC(1,:)
+        end if
+
+        ! ! MPI proc=1
+        ! if(rank .eq. 0)then
+        !     print*, 'XCmax val: ', XCmax
+        !     print*, 'XCmin val: ', XCmin
+        ! end if
+
+        ! MPI proc=6
+        ! if(rank .eq. 5)then
+        !     print*, 'XCmax val: ', XCmax
+        !     print*, 'XCmin val: ', XCmin
+        ! end if
+
+        ! ! MPI proc=1
+        ! if(rank .eq. 0)then
+        !     ! print*, 'tempval_proc 55 val: ', tempval_proc(55)
+        !     print*, 'ui_XC 55 val: ', ui_XC(55,:)
+        ! end if
+
+        ! ! MPI proc=6
+        ! if(rank .eq. 5)then
+        !     ! print*, 'tempval_proc 55 val: ', tempval_proc(5)
+        !     print*, 'ui_XC 55 val: ', ui_XC(55,:)
+        ! end if
+        ! if(rank .eq. 0)then
+        !     print*, 'ui_XC: ', ui_XC(4,7)
+        ! end if
+        if(rank .eq. 5)then
+            ! print*, 'ui_XC: ', ui_XC(4,7)
+        end if
+
         ! ui_XC   input
         ! val(i)/tempval  output
         do i = 1,NP
@@ -656,6 +728,10 @@
             cur_i = ui_XC_index(i)
             !!------Confine each of feasible individuals in the lower-upper bound-------!!
             
+            ! if(rank .eq. 5 .and. i .eq. 4)then
+            !     print*, 'ui_XC: ', ui_XC(4,7)
+            !     ! print*, 'XCmax: ', XCmax(7)
+            ! end if
             call obj(ui_XC(cur_i,:),tot_ntc,Dim_XC,ntc,nolayer,npara,ns,m_ap,Vobs1,tempval)
             ! nfeval=nfeval+1
 
@@ -670,6 +746,22 @@
             ! end if
         end do
 
+        ! ! MPI proc=1
+        ! if(rank .eq. 0)then
+        !     ! print*, 'tempval_proc 55 val: ', tempval_proc(55)
+        !     print*, 'ui_XC 55 val: ', ui_XC(55,:)
+        ! end if
+
+        ! ! MPI proc=6
+        ! if(rank .eq. 5)then
+        !     ! print*, 'tempval_proc 55 val: ', tempval_proc(5)
+        !     print*, 'ui_XC 55 val: ', ui_XC(55,:)
+        ! end if
+
+        ! if(rank .eq. 2)then
+        !     print*, 'rank2 21~25 val: ', tempval_proc(1:5)
+        ! end if
+
         call MPI_AllGather( tempval_proc, workPProc1, MPI_DOUBLE_PRECISION, &  ! everyone send 3*2 ints
                 tempval_main, workPProc1, MPI_DOUBLE_PRECISION,        &  ! root gets 1 resized type from everyone
                 MPI_COMM_WORLD, ierr)
@@ -677,6 +769,12 @@
         
         call MPI_Barrier(MPI_COMM_WORLD, ierr)
         ! call MPI_Bcast(pop_XC) !  call MPI_Bcast(val)
+
+        ! print*, '============================'
+        ! print*, 'Iter', iter, 'rank: ', rank
+        ! print*, 'tempval_main is :'
+        ! print*, tempval_main 
+        ! print*, '============================'
 
         do i = 1,NP
             tempval = tempval_main(i)
@@ -690,11 +788,39 @@
             end if
         end do
 
+        if(rank .eq. 0)then
+            ! print*, 'val is :', val
+            ! print*, 'tempval_main is :', tempval_main(4)
+            ! print*, 'ui_XC: ', ui_XC(4,7)
+            ! print*, 'pop_XC: ', pop_XC(4,7)
+        end if
+        if(rank .eq. 5)then
+            ! print*, 'val is :', val
+            ! print*, 'tempval_main is :', tempval_main(4)
+            ! print*, 'ui_XC: ', ui_XC(4,7)
+            ! print*, 'pop_XC: ', pop_XC(4,7)
+        end if
+
+        ! print*, '============================'
+        ! print*, 'Iter', iter, 'rank: ', rank
+        ! print*, 'val is :'
+        ! print*, val 
+        ! print*, '============================'
+
+        call MPI_Barrier(MPI_COMM_WORLD, ierr)
+
         bestmemit_XC=bestmem_XC
 
         call SYSTEM_CLOCK(iTimes3)
 
         if(rank .eq. 0)then
+            ! print*, '====BEGIN NEXT ITER=============='
+            ! print*, '============================'
+            ! print*, 'Iter', iter, 'rank: ', rank
+            ! print*, 'tempval_main is :'
+            ! print*, tempval_main(55)
+            ! print*, '============================'
+
             if( (refresh > 0) .and. (mod(iter,refresh)==0)) then
     !            if (method(3)==1) write(unit=iwrite,FMT=203) iter
                 write(unit=*, FMT=203) iter
@@ -718,6 +844,7 @@
         end if
         
         iter=iter+1
+        call MPI_Barrier(MPI_COMM_WORLD, ierr)
 
     end do
 
