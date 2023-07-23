@@ -79,7 +79,7 @@
 
     implicit none
 
-    integer(kind=IB), parameter :: NP=60, itermax=2000, strategy=6, &
+    integer(kind=IB), parameter :: NP=60, itermax=200, strategy=6, &
         refresh=10, iwrite=15
     integer(kind=IB), dimension(3), parameter :: method=(/0, 1, 1/)
     real(kind=8), parameter :: VTR=1.0e-30_RPD, CR_XC=0.5_RPD
@@ -506,11 +506,6 @@
     real(kind=8), allocatable :: tempval_proc(:)
     real(kind=8), dimension(NP) :: tempval_main
 
-    Proc1 = 6
-    workPProc1 = NP / Proc1
-    allocate(ui_XC_index(workPProc1))
-    allocate(tempval_proc(workPProc1))
-
     call SYSTEM_CLOCK(count_rate=rate)
     call SYSTEM_CLOCK(iTimes1)
     !!-----Initialize a population --------------------------------------------!!
@@ -553,6 +548,11 @@
     call MPI_COMM_SIZE(MPI_COMM_WORLD, nproc_current, ierr)
     call MPI_COMM_RANK(MPI_COMM_WORLD, rank, ierr)
     
+    Proc1 = nproc_current
+    workPProc1 = NP / Proc1
+    allocate(ui_XC_index(workPProc1))
+    allocate(tempval_proc(workPProc1))
+
     do i = 1,size(ui_XC_index)
         ui_XC_index(i) = rank*size(ui_XC_index) + i
     end do
